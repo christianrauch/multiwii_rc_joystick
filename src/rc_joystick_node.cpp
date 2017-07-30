@@ -1,19 +1,15 @@
-#include <linux/input.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <sys/ioctl.h>
-#include <stdlib.h>
-#include <dirent.h>
-
-#include <map>
-#include <string>
-#include <cstring>
-#include <iostream>
-
 #include <libevdev/libevdev.h>
+#include <fcntl.h>
+#include <dirent.h>
 
 #include <ros/console.h>
 #include <ros/ros.h>
+
+#include <mavros_msgs/OverrideRCIn.h>
+
+
+static const uint16_t rcmin = 1000;
+static const uint16_t rcmax = 2000;
 
 std::map<std::string, std::string> getEventList() {
     static const std::string event_dir = "/dev/input";
@@ -51,6 +47,8 @@ int main(int argc, char **argv) {
 
     ros::init(argc, argv, "rc_joystick");
     ros::NodeHandle n("~");
+    ros::Rate rate(100);
+    ros::Publisher pub = n.advertise<mavros_msgs::OverrideRCIn>("rc/override/raw", 1);
 
     // read parameters
     std::string device;
@@ -70,21 +68,69 @@ int main(int argc, char **argv) {
             }
             exit(EXIT_FAILURE);
         }
-        else {
-            ROS_INFO_STREAM("using "+evdevs.at(device));
-        }
     }
 
     struct libevdev *dev = NULL;
-    int fd = open(evdevs.begin()->first.c_str(), O_RDONLY|O_NONBLOCK);
+    int fd = open(device.c_str(), O_RDONLY);
     if(libevdev_new_from_fd(fd, &dev) < 0) {
         ROS_ERROR_STREAM("libevdev error");
         close(fd);
         return EXIT_FAILURE;
     }
-    ROS_INFO_STREAM("opened: "<<libevdev_get_name(dev));
+    ROS_INFO_STREAM("device: "<<libevdev_get_name(dev));
+    ROS_INFO_STREAM("firmware: "<<libevdev_get_id_version(dev));
 
-    //...
+    // check if device is joystick
+    if(!libevdev_has_event_type(dev, EV_ABS)) {
+        ROS_ERROR_STREAM("device is not a joystick");
+        libevdev_free(dev);
+        close(fd);
+        return EXIT_FAILURE;
+    }
+
+    const int max_evcode = libevdev_event_type_get_max(EV_ABS);
+    if(max_evcode<0) {
+        ROS_ERROR_STREAM("invalid type");
+        libevdev_free(dev);
+        close(fd);
+        return EXIT_FAILURE;
+    }
+
+    // get minimum and maximum value ranges
+    std::vector<int> axmin, axmax;
+    for (uint icode(0); icode < uint(max_evcode); icode++) {
+        if(libevdev_has_event_code(dev, EV_ABS, icode)) {
+            axmin.push_back(libevdev_get_abs_minimum(dev, icode));
+            axmax.push_back(libevdev_get_abs_maximum(dev, icode));
+        }
+    }
+
+    uint naxes;
+    if(axmin.size()==axmax.size()) {
+        naxes = uint(axmin.size());
+    }
+    else {
+        throw std::runtime_error("amount of axes do not match");
+    }
+
+    mavros_msgs::OverrideRCIn msg;
+
+    while(n.ok()) {
+        struct input_event ev;
+        int rc = libevdev_next_event(dev, LIBEVDEV_READ_FLAG_NORMAL, &ev);
+        if(rc==LIBEVDEV_READ_STATUS_SUCCESS) {
+            for(uint iaxis(0); iaxis<naxes; iaxis++) {
+                int axval = libevdev_get_event_value(dev, EV_ABS, iaxis);
+                msg.channels[iaxis] = rcmin + ((axval-axmin[iaxis])*(rcmax-rcmin)) / (axmax[iaxis]-axmin[iaxis]);
+            }
+            pub.publish(msg);
+        }
+        else if(rc==LIBEVDEV_READ_STATUS_SYNC) {
+            ROS_ERROR_STREAM("out of sync");
+        }
+
+        rate.sleep();
+    }
 
     libevdev_free(dev);
     close(fd);
