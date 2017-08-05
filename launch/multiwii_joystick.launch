@@ -1,5 +1,5 @@
 <launch>
-    <node name="multiwii_joystick" pkg="multiwii_rc_joystick" type="multiwii_rc_joystick_node" clear_params="true">
+    <node name="multiwii_joystick" pkg="multiwii_rc_joystick" type="multiwii_rc_joystick_node" clear_params="true" output="screen">
         <param name="device" value="" />
         <remap from="multiwii_joystick/rc/override/raw" to="multiwii/rc/override/raw" />
     </node>

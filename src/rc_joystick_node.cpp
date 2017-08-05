@@ -143,6 +143,13 @@ public:
                 else if(rc==LIBEVDEV_READ_STATUS_SYNC) {
                     ROS_ERROR_STREAM("out of sync");
                 }
+                else if(rc==-ENODEV){
+                    ROS_ERROR_STREAM("device disconnected, shutting down");
+                    ros::shutdown();
+                }
+                else {
+                    ROS_ERROR_STREAM("unknown return value: " << rc);
+                }
             }
         });
         ev_block_thread.detach();
